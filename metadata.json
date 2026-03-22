@@ -1,0 +1,7 @@
+{
+  "name": "Kanzu Palace",
+  "description": "A premium e-commerce platform for traditional Swahili Kanzus, featuring a public store, custom tailoring orders, and a comprehensive management dashboard.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

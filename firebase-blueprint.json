@@ -1,0 +1,225 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A Kanzu product in the store",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "old_price": { "type": "number" },
+        "category": { "type": "string" },
+        "sizes": { "type": "array", "items": { "type": "string" } },
+        "image_url": { "type": "string" },
+        "gallery_urls": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "in_stock": { "type": "boolean" },
+        "featured": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "price", "category", "image_url"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer order",
+      "type": "object",
+      "properties": {
+        "order_number": { "type": "string" },
+        "customer_name": { "type": "string" },
+        "customer_phone": { "type": "string" },
+        "customer_address": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "total": { "type": "number" },
+        "delivery_fee": { "type": "number" },
+        "delivery_zone": { "type": "string" },
+        "payment_method": { "type": "string" },
+        "order_status": { "type": "string" },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customer_name", "customer_phone", "total", "order_status"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "A staff member",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "jina": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string" },
+        "commission": { "type": "number" },
+        "pay_type": { "type": "string" },
+        "salary": { "type": "number" },
+        "daily_rate": { "type": "number" },
+        "active": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["jina", "email", "role"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A customer with measurements",
+      "type": "object",
+      "properties": {
+        "jina": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "measurements": { "type": "object" },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["jina"]
+    },
+    "CustomOrder": {
+      "title": "Custom Order",
+      "description": "A request for a custom tailored Kanzu",
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "string" },
+        "product_name": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "color": { "type": "string" },
+        "description": { "type": "string" },
+        "budget": { "type": "number" },
+        "measurements": { "type": "object" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "status"]
+    },
+    "TailorOrder": {
+      "title": "Tailor Order",
+      "description": "An order assigned to a tailor",
+      "type": "object",
+      "properties": {
+        "customer_name": { "type": "string" },
+        "customer_phone": { "type": "string" },
+        "kanzu_type": { "type": "string" },
+        "amount": { "type": "number" },
+        "deadline": { "type": "string" },
+        "tailor_id": { "type": "string" },
+        "tailor_name": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customer_name", "kanzu_type", "status"]
+    },
+    "Banner": {
+      "title": "Banner",
+      "description": "A banner for the home slider",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "badge": { "type": "string" },
+        "button_text": { "type": "string" },
+        "button_link": { "type": "string" },
+        "image_url": { "type": "string" },
+        "bg_color": { "type": "string" },
+        "order": { "type": "number" },
+        "is_active": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "image_url", "is_active"]
+    },
+    "PromoCode": {
+      "title": "Promo Code",
+      "description": "A discount code",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "type": { "type": "string" },
+        "value": { "type": "number" },
+        "min_order": { "type": "number" },
+        "max_uses": { "type": "number" },
+        "used_count": { "type": "number" },
+        "description": { "type": "string" },
+        "active": { "type": "boolean" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "type", "value", "active"]
+    },
+    "OfficeSettings": {
+      "title": "Office Settings",
+      "description": "General settings for the office",
+      "type": "object",
+      "properties": {
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "wa_phone": { "type": "string" },
+        "open_time": { "type": "string" },
+        "close_time": { "type": "string" },
+        "map_url": { "type": "string" },
+        "extra": { "type": "string" }
+      }
+    },
+    "AppSettings": {
+      "title": "App Settings",
+      "description": "UI and brand settings for the app",
+      "type": "object",
+      "properties": {
+        "settings": { "type": "object" }
+      }
+    },
+    "DeliveryZone": {
+      "title": "Delivery Zone",
+      "description": "A delivery zone with fee",
+      "type": "object",
+      "properties": {
+        "label": { "type": "string" },
+        "fee": { "type": "number" }
+      },
+      "required": ["label", "fee"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of products"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of customer orders"
+    },
+    "/staff/{staffId}": {
+      "schema": "Staff",
+      "description": "Collection of staff members"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of customers and measurements"
+    },
+    "/custom_orders/{customOrderId}": {
+      "schema": "CustomOrder",
+      "description": "Collection of custom tailoring requests"
+    },
+    "/tailor_orders/{tailorOrderId}": {
+      "schema": "TailorOrder",
+      "description": "Collection of tailoring tasks"
+    },
+    "/banners/{bannerId}": {
+      "schema": "Banner",
+      "description": "Collection of home banners"
+    },
+    "/promo_codes/{promoId}": {
+      "schema": "PromoCode",
+      "description": "Collection of discount codes"
+    },
+    "/office_settings/1": {
+      "schema": "OfficeSettings",
+      "description": "Singleton office settings"
+    },
+    "/app_settings/1": {
+      "schema": "AppSettings",
+      "description": "Singleton app settings"
+    },
+    "/delivery_zones/{zoneId}": {
+      "schema": "DeliveryZone",
+      "description": "Collection of delivery zones"
+    }
+  }
+}

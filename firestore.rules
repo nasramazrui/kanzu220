@@ -1,0 +1,175 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: products
+// Fields:
+//   - name: string (required)
+//   - price: number (required)
+//   - old_price: number (optional)
+//   - category: string (required)
+//   - sizes: list (optional)
+//   - image_url: string (required)
+//   - gallery_urls: list (optional)
+//   - description: string (optional)
+//   - in_stock: bool (optional)
+//   - featured: bool (optional)
+//   - created_at: timestamp (optional)
+//
+// Collection: orders
+// Fields:
+//   - order_number: string (optional)
+//   - customer_name: string (required)
+//   - customer_phone: string (required)
+//   - customer_address: string (optional)
+//   - items: list (optional)
+//   - total: number (required)
+//   - delivery_fee: number (optional)
+//   - delivery_zone: string (optional)
+//   - payment_method: string (optional)
+//   - order_status: string (required)
+//   - notes: string (optional)
+//   - created_at: timestamp (optional)
+//
+// Collection: staff
+// Fields:
+//   - user_id: string (required)
+//   - jina: string (required)
+//   - email: string (required)
+//   - phone: string (optional)
+//   - role: string (required)
+//   - commission: number (optional)
+//   - pay_type: string (optional)
+//   - salary: number (optional)
+//   - daily_rate: number (optional)
+//   - active: bool (optional)
+//
+// Collection: customers
+// Fields:
+//   - jina: string (required)
+//   - phone: string (optional)
+//   - email: string (optional)
+//   - measurements: map (optional)
+//   - notes: string (optional)
+//
+// Collection: custom_orders
+// Fields:
+//   - name: string (required)
+//   - phone: string (required)
+//   - status: string (required)
+//   ...
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isAuthenticated() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((exists(/databases/$(database)/documents/staff/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'admin') ||
+         (request.auth.token.email == "amytzee@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isStaff() {
+      return isAuthenticated() && 
+        (exists(/databases/$(database)/documents/staff/$(request.auth.uid)) || 
+         (request.auth.token.email == "amytzee@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    function isValidNumber(val, min, max) {
+      return val is number && val >= min && val <= max;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Products: Publicly readable, admin/manager writable
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin() || (isStaff() && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'manager');
+    }
+
+    // Orders: Publicly readable (for tracking) and creatable (for checkout), staff writable
+    match /orders/{orderId} {
+      allow read, create: if true; 
+      allow update, delete: if isStaff();
+    }
+
+    // Staff: Admin only for write, authenticated for read
+    match /staff/{staffId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Customers: Staff only
+    match /customers/{customerId} {
+      allow read, write: if isStaff();
+    }
+
+    // Custom Orders: Publicly creatable, staff readable/writable
+    match /custom_orders/{customOrderId} {
+      allow create: if true;
+      allow read, write: if isStaff();
+    }
+
+    // Tailor Orders: Staff only
+    match /tailor_orders/{tailorOrderId} {
+      allow read, write: if isStaff();
+    }
+
+    // Banners: Publicly readable, admin/manager writable
+    match /banners/{bannerId} {
+      allow read: if true;
+      allow write: if isAdmin() || (isStaff() && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'manager');
+    }
+
+    // Promo Codes: Publicly readable (to check validity), admin/manager writable
+    match /promo_codes/{promoId} {
+      allow read: if true;
+      allow write: if isAdmin() || (isStaff() && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'manager');
+    }
+
+    // Settings: Publicly readable, admin only writable
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /office_settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /app_settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Delivery Zones: Publicly readable, admin/manager writable
+    match /delivery_zones/{zoneId} {
+      allow read: if true;
+      allow write: if isAdmin() || (isStaff() && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'manager');
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
