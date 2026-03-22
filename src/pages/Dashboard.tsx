@@ -48,6 +48,7 @@ import {
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { QRCodeSVG } from 'qrcode.react';
+import { Printer, Share2, Copy } from 'lucide-react';
 import { cn, getDirectImageUrl } from '../lib/utils';
 import { collection, query, orderBy, onSnapshot, getDocs, where, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
@@ -564,10 +565,13 @@ const CustomersManagement = () => {
 };
 
 const ProductsManagement = () => {
+  const { isAdmin, isStaff } = useApp();
   const [products, setProducts] = useState<Product[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
+  const [customUrl, setCustomUrl] = useState('');
+  const [copied, setCopied] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formData, setFormData] = useState({
     name: '',
@@ -664,43 +668,220 @@ const ProductsManagement = () => {
         ))}
       </div>
 
-      {/* QR Code Modal */}
+      {/* QR Code Modal - Premium Product Label */}
       <AnimatePresence>
         {isQRModalOpen && qrProduct && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 overflow-y-auto">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setIsQRModalOpen(false)}
-              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+              className="fixed inset-0 bg-black/95 backdrop-blur-xl"
             />
             <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-[#111] p-8 shadow-2xl text-center"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 bg-[#0a0a0a] border border-white/10 rounded-[2.5rem] p-8 md:p-12 shadow-2xl"
             >
-              <h3 className="text-xl font-bold text-white mb-2">{qrProduct.name}</h3>
-              <p className="text-xs text-white/40 mb-6">Scan this code to view this product on the store.</p>
-              
-              <div className="mx-auto p-4 bg-white rounded-2xl shadow-2xl inline-block">
-                <QRCodeSVG 
-                  value={`${window.location.origin}/product/${qrProduct.id}`} 
-                  size={200}
-                  level="H"
-                />
+                  {/* Label Preview (The "Bomba" Design) */}
+                  <div className="flex justify-center">
+                    <div id="printable-label" className="w-[320px] bg-[#050505] rounded-[2.5rem] overflow-hidden border-2 border-[#c9a84c] shadow-[0_0_60px_rgba(201,168,76,0.2)] flex flex-col items-center p-8 text-center relative">
+                      {/* Background Pattern Overlay */}
+                      <div className="absolute inset-0 opacity-[0.03] pointer-events-none islamic-pattern-dots" />
+                      <div className="absolute inset-0 opacity-[0.05] pointer-events-none islamic-pattern-lines" />
+
+                  {/* Decorative Elements */}
+                  <div className="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-[#c9a84c]/20 to-transparent pointer-events-none" />
+                  <div className="absolute top-6 right-8 opacity-40">
+                    <span className="text-4xl filter drop-shadow-[0_0_10px_rgba(201,168,76,0.5)]">🌙</span>
+                  </div>
+
+                  {/* Header */}
+                  <div className="mb-8 z-10">
+                    <div className="flex items-center justify-center gap-3 mb-2">
+                      <span className="text-3xl filter drop-shadow-[0_0_8px_rgba(201,168,76,0.3)]">🕌</span>
+                      <h2 className="font-serif text-2xl font-bold text-[#c9a84c] tracking-tight">Kanzu Palace</h2>
+                    </div>
+                    <div className="h-[1px] w-24 bg-gradient-to-r from-transparent via-[#c9a84c]/50 to-transparent mx-auto mb-2" />
+                    <p className="text-[9px] font-bold text-white/50 uppercase tracking-[0.3em]">Lebo ya Bidhaa • Product Label</p>
+                  </div>
+
+                  {/* Product Info */}
+                  <div className="mb-10 z-10">
+                    <p className="text-[11px] font-bold text-[#c9a84c] uppercase tracking-[0.4em] mb-3 opacity-80">{qrProduct.category}</p>
+                    <h3 className="text-3xl font-serif font-bold text-white tracking-[0.1em] uppercase leading-tight drop-shadow-lg">{qrProduct.name}</h3>
+                  </div>
+
+                  {/* QR Code Container */}
+                  <div className="relative p-7 bg-white rounded-[2.5rem] shadow-[0_0_40px_rgba(201,168,76,0.15)] mb-10 group transition-transform hover:scale-105 duration-500">
+                    <div className="absolute inset-0 border-[3px] border-[#c9a84c]/30 rounded-[2.5rem] -m-1.5" />
+                    <QRCodeSVG 
+                      value={customUrl || `${window.location.origin}/product/${qrProduct.id}`} 
+                      size={170}
+                      level="H"
+                      includeMargin={false}
+                      fgColor="#1a1208"
+                      imageSettings={{
+                        src: "https://picsum.photos/seed/kanzu-logo/60/60",
+                        x: undefined,
+                        y: undefined,
+                        height: 36,
+                        width: 36,
+                        excavate: true,
+                      }}
+                    />
+                  </div>
+
+                  {/* Instructions */}
+                  <div className="mb-10 px-6 z-10">
+                    <div className="inline-block px-4 py-1.5 rounded-full bg-[#c9a84c]/10 border border-[#c9a84c]/20 mb-3">
+                      <p className="text-[9px] font-bold text-[#c9a84c] uppercase tracking-widest">Scan & Discover</p>
+                    </div>
+                    <p className="text-[11px] text-white/70 leading-relaxed font-medium">
+                      Scan QR kuona bidhaa hii mtandaoni<br />
+                      au chagua size na kuagiza
+                    </p>
+                  </div>
+
+                  {/* Price & Sizes */}
+                  <div className="w-full pt-8 border-t border-white/10 flex flex-col items-center z-10">
+                    <div className="flex flex-col items-center gap-1 mb-6">
+                      <div className="flex items-baseline gap-3">
+                        <span className="text-3xl font-bold text-[#c9a84c] drop-shadow-[0_0_10px_rgba(201,168,76,0.3)]">TSh {qrProduct.price.toLocaleString()}</span>
+                        {qrProduct.old_price && (
+                          <span className="text-sm text-white/30 line-through decoration-[#c9a84c]/50">TSh {qrProduct.old_price.toLocaleString()}</span>
+                        )}
+                      </div>
+                      {qrProduct.old_price && (
+                        <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-500 text-[10px] font-bold uppercase tracking-tighter">
+                          Save {Math.round(((qrProduct.old_price - qrProduct.price) / qrProduct.old_price) * 100)}% OFF
+                        </span>
+                      )}
+                    </div>
+                    
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => (
+                        <div key={s} className="w-10 h-10 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-[11px] font-bold text-white/60 hover:border-[#c9a84c]/50 hover:text-[#c9a84c] transition-colors">
+                          {s}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Footer URL */}
+                  <div className="mt-10 opacity-30">
+                    <p className="text-[8px] font-mono text-white tracking-[0.3em] uppercase">
+                      {window.location.host} • ID: {qrProduct.id.substring(0, 8)}
+                    </p>
+                  </div>
+                </div>
               </div>
-              
-              <div className="mt-8 flex flex-col gap-3">
-                <button 
-                  onClick={() => window.print()}
-                  className="w-full rounded-xl bg-gold py-3 font-bold text-black hover:scale-105 transition-all"
-                >
-                  Print QR Code
-                </button>
-                <button 
-                  onClick={() => setIsQRModalOpen(false)}
-                  className="w-full rounded-xl bg-white/5 py-3 font-bold text-white hover:bg-white/10 transition-all"
-                >
-                  Close
-                </button>
+
+              {/* Controls */}
+              <div className="flex flex-col justify-center">
+                <div className="mb-8">
+                  <h3 className="text-2xl font-bold text-white mb-2">Lebo ya Kanzu</h3>
+                  <p className="text-white/50 mb-6">Hii ni lebo ya kisasa (Premium Label) kwa ajili ya kuweka kwenye kanzu zako dukani. Wateja wanaweza kuscan na kuona maelezo yote.</p>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-2">Custom Link (Optional)</label>
+                      <input 
+                        type="text" 
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder="Weka link nyingine hapa kama unataka..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:border-[#c9a84c] transition-all"
+                      />
+                      <p className="text-[9px] text-white/30 mt-2">Acha wazi ili kutumia link ya kawaida ya bidhaa hii.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4">
+                  <button 
+                    onClick={() => {
+                      const printContent = document.getElementById('printable-label');
+                      const windowUrl = window.location.href;
+                      const uniqueName = `label-${qrProduct.id}`;
+                      const printWindow = window.open('', uniqueName, 'width=600,height=800');
+                      if (printWindow) {
+                        printWindow.document.write(`
+                          <html>
+                            <head>
+                              <title>Print Label - ${qrProduct.name}</title>
+                              <script src="https://cdn.tailwindcss.com"></script>
+                              <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;700&display=swap" rel="stylesheet">
+                              <style>
+                                @media print {
+                                  body { margin: 0; padding: 0; background: white; }
+                                  #printable-label { 
+                                    box-shadow: none !important; 
+                                    border: 2px solid #c9a84c !important;
+                                    -webkit-print-color-adjust: exact;
+                                    print-color-adjust: exact;
+                                  }
+                                }
+                                body { font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f0f0f0; }
+                                .font-serif { font-family: 'Playfair Display', serif; }
+                                .islamic-pattern-dots {
+                                  background-image: radial-gradient(#c9a84c 0.5px, transparent 0.5px);
+                                  background-size: 10px 10px;
+                                }
+                                .islamic-pattern-lines {
+                                  background-image: linear-gradient(45deg, #c9a84c 25%, transparent 25%, transparent 50%, #c9a84c 50%, #c9a84c 75%, transparent 75%, transparent);
+                                  background-size: 40px 40px;
+                                }
+                              </style>
+                            </head>
+                            <body>
+                              ${printContent?.outerHTML}
+                              <script>
+                                setTimeout(() => {
+                                  window.print();
+                                  window.close();
+                                }, 800);
+                              </script>
+                            </body>
+                          </html>
+                        `);
+                        printWindow.document.close();
+                      }
+                    }}
+                    className="flex items-center justify-center gap-3 w-full rounded-2xl bg-[#c9a84c] py-4 font-bold text-black hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    <Printer size={20} />
+                    Print Lebo (Dukani)
+                  </button>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <button 
+                      onClick={() => {
+                        const url = `${window.location.origin}/product/${qrProduct.id}`;
+                        navigator.clipboard.writeText(url);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                    >
+                      {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
+                      Copy Link
+                    </button>
+                    <button 
+                      onClick={() => setIsQRModalOpen(false)}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                    >
+                      Funga
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-8 p-6 rounded-2xl bg-white/5 border border-white/10">
+                  <h4 className="text-xs font-bold text-[#c9a84c] uppercase tracking-widest mb-2">Maelekezo kwa Staff</h4>
+                  <ul className="text-xs text-white/40 space-y-2">
+                    <li>• Print lebo hii kwenye karatasi ngumu (Cardstock).</li>
+                    <li>• Bandika lebo kwenye kanzu husika kwa kutumia kamba ya hariri.</li>
+                    <li>• Hakikisha QR code inaonekana vizuri bila kukunja.</li>
+                  </ul>
+                </div>
               </div>
             </motion.div>
           </div>

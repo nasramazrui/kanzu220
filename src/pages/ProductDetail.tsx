@@ -245,6 +245,14 @@ export const ProductDetail = () => {
                 size={120}
                 level="H"
                 includeMargin={false}
+                imageSettings={{
+                  src: "https://picsum.photos/seed/kanzu-logo/30/30",
+                  x: undefined,
+                  y: undefined,
+                  height: 24,
+                  width: 24,
+                  excavate: true,
+                }}
               />
             </div>
             <p className="mt-4 text-[10px] font-bold text-gold uppercase tracking-widest">Kanzu Palace Mobile</p>
