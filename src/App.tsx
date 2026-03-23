@@ -29,6 +29,8 @@ export interface Product {
   description?: string;
   in_stock: boolean;
   featured?: boolean;
+  stock_quantity?: number;
+  loyalty_points_value?: number;
 }
 
 export interface CartItem extends Product {

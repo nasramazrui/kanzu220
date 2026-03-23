@@ -43,14 +43,15 @@ import {
   EyeOff,
   User,
   Mail,
-  Phone
+  Phone,
+  Calendar
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { QRCodeSVG } from 'qrcode.react';
 import { Printer, Share2, Copy } from 'lucide-react';
 import { cn, getDirectImageUrl } from '../lib/utils';
-import { collection, query, orderBy, onSnapshot, getDocs, where, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, getDocs, getDoc, where, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 import { signOut } from 'firebase/auth';
@@ -61,6 +62,7 @@ import { Product } from '../App';
 // --- Sub-components ---
 const OrdersManagement = () => {
   const [orders, setOrders] = useState<any[]>([]);
+  const [staff, setStaff] = useState<any[]>([]);
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
@@ -70,11 +72,71 @@ const OrdersManagement = () => {
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'orders');
     });
-    return () => unsubscribe();
+
+    const unsubStaff = onSnapshot(query(collection(db, 'staff'), where('role', '==', 'tailor')), (snapshot) => {
+      setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => { unsubscribe(); unsubStaff(); };
   }, []);
 
   const updateStatus = async (id: string, status: string) => {
+    const order = orders.find(o => o.id === id);
+    if (!order) return;
+
+    if (status === 'Imelipwa' && order.order_status !== 'Imelipwa') {
+      if (order.items) {
+        for (const item of order.items) {
+          const productRef = doc(db, 'products', item.id);
+          const productSnap = await getDoc(productRef);
+          if (productSnap.exists()) {
+            const currentStock = productSnap.data().stock_quantity || 0;
+            await updateDoc(productRef, { 
+              stock_quantity: Math.max(0, currentStock - (item.quantity || 1)),
+              in_stock: (currentStock - (item.quantity || 1)) > 0
+            });
+          }
+        }
+      }
+
+      if (order.customer_id) {
+        const customerRef = doc(db, 'customers', order.customer_id);
+        const customerSnap = await getDoc(customerRef);
+        if (customerSnap.exists()) {
+          const currentPoints = customerSnap.data().loyalty_points || 0;
+          const pointsToAward = order.items?.reduce((acc: number, item: any) => acc + (item.loyalty_points_value || 10) * (item.quantity || 1), 0) || 0;
+          await updateDoc(customerRef, { 
+            loyalty_points: currentPoints + pointsToAward,
+            total_spent: (customerSnap.data().total_spent || 0) + (order.total || 0),
+            order_count: (customerSnap.data().order_count || 0) + 1
+          });
+        }
+      }
+    }
+
     await updateDoc(doc(db, 'orders', id), { order_status: status });
+  };
+
+  const assignTailor = async (orderId: string, tailorId: string) => {
+    const tailor = staff.find(s => s.id === tailorId);
+    if (!tailor) return;
+    await updateDoc(doc(db, 'orders', orderId), {
+      assigned_tailor_id: tailorId,
+      assigned_tailor_name: tailor.jina,
+      order_status: 'Inashonwa'
+    });
+  };
+
+  const updateDeadline = async (orderId: string, date: string) => {
+    await updateDoc(doc(db, 'orders', orderId), {
+      deadline: Timestamp.fromDate(new Date(date))
+    });
+  };
+
+  const sendWhatsApp = (order: any) => {
+    const message = `Habari ${order.customer_name}! 🕌\n\nOda yako #${order.order_number} ya Kanzu Palace imepokelewa na sasa hivi ni: *${order.order_status}*.\n\nJumla: TSh ${order.total?.toLocaleString()}\n\nAsante kwa kuchagua Kanzu Palace! 🌙`;
+    const phone = order.customer_phone?.replace(/\D/g, '');
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   const filteredOrders = orders.filter(o => 
@@ -100,18 +162,37 @@ const OrdersManagement = () => {
             <tr className="bg-white/5 text-[10px] font-bold uppercase tracking-widest text-white/40">
               <th className="px-6 py-4">Order #</th>
               <th className="px-6 py-4">Customer</th>
+              <th className="px-6 py-4">Tailor & Deadline</th>
               <th className="px-6 py-4">Total</th>
               <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Actions</th>
+              <th className="px-6 py-4 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
             {filteredOrders.map((o) => (
-              <tr key={o.id} className="hover:bg-white/5 transition-colors">
+              <tr key={o.id} className="hover:bg-white/5 transition-colors group">
                 <td className="px-6 py-4 font-mono text-xs text-gold">{o.order_number}</td>
                 <td className="px-6 py-4">
                   <p className="text-sm font-bold text-white">{o.customer_name}</p>
                   <p className="text-xs text-white/40">{o.customer_phone}</p>
+                </td>
+                <td className="px-6 py-4">
+                  <div className="space-y-2">
+                    <select 
+                      value={o.assigned_tailor_id || ''}
+                      onChange={(e) => assignTailor(o.id, e.target.value)}
+                      className="bg-black border border-white/10 rounded-lg text-[10px] p-1 text-white outline-none w-full"
+                    >
+                      <option value="">Assign Tailor</option>
+                      {staff.map(s => <option key={s.id} value={s.id}>{s.jina}</option>)}
+                    </select>
+                    <input 
+                      type="date"
+                      defaultValue={o.deadline?.toDate().toISOString().split('T')[0]}
+                      onChange={(e) => updateDeadline(o.id, e.target.value)}
+                      className="bg-black border border-white/10 rounded-lg text-[10px] p-1 text-white outline-none w-full"
+                    />
+                  </div>
                 </td>
                 <td className="px-6 py-4 text-sm font-bold text-white">TSh {o.total?.toLocaleString()}</td>
                 <td className="px-6 py-4">
@@ -122,25 +203,205 @@ const OrdersManagement = () => {
                     {o.order_status}
                   </span>
                 </td>
-                <td className="px-6 py-4">
-                  <select 
-                    value={o.order_status}
-                    onChange={(e) => updateStatus(o.id, e.target.value)}
-                    className="bg-black border border-white/10 rounded-lg text-xs p-1 text-white outline-none"
-                  >
-                    <option>Inasubiri Uthibitisho</option>
-                    <option>Imelipwa</option>
-                    <option>Inashonwa</option>
-                    <option>Imetumwa</option>
-                    <option>Imefikia</option>
-                    <option>Imefutwa</option>
-                  </select>
+                <td className="px-6 py-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    <button 
+                      onClick={() => sendWhatsApp(o)}
+                      className="p-2 rounded-lg bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white transition-all"
+                      title="Send WhatsApp"
+                    >
+                      <MessageSquare size={14} />
+                    </button>
+                    <select 
+                      value={o.order_status}
+                      onChange={(e) => updateStatus(o.id, e.target.value)}
+                      className="bg-black border border-white/10 rounded-lg text-xs p-1 text-white outline-none"
+                    >
+                      <option>Inasubiri Uthibitisho</option>
+                      <option>Imelipwa</option>
+                      <option>Inashonwa</option>
+                      <option>Imetumwa</option>
+                      <option>Imefikia</option>
+                      <option>Imefutwa</option>
+                    </select>
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+};
+
+const SuppliersManagement = () => {
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState({ name: '', contact_person: '', phone: '', email: '', category: 'Fabrics', address: '', notes: '' });
+
+  useEffect(() => {
+    const q = query(collection(db, 'suppliers'), orderBy('created_at', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setSuppliers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'suppliers');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await addDoc(collection(db, 'suppliers'), { ...formData, created_at: serverTimestamp() });
+      setIsModalOpen(false);
+      setFormData({ name: '', contact_person: '', phone: '', email: '', category: 'Fabrics', address: '', notes: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'suppliers');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-bold text-white">Suppliers ({suppliers.length})</h3>
+        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 rounded-xl bg-gold px-4 py-2 text-sm font-bold text-black hover:scale-105 transition-all">
+          <Plus size={18} /> Add Supplier
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {suppliers.map((s) => (
+          <div key={s.id} className="rounded-2xl border border-white/10 bg-white/5 p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="h-12 w-12 rounded-full bg-gold/10 flex items-center justify-center text-gold font-bold text-xl">
+                <Store size={24} />
+              </div>
+              <div>
+                <h4 className="font-bold text-white">{s.name}</h4>
+                <p className="text-xs text-white/40 uppercase tracking-widest">{s.category}</p>
+              </div>
+            </div>
+            <div className="space-y-2 text-sm text-white/60">
+              <p className="flex items-center gap-2"><User size={14} /> {s.contact_person}</p>
+              <p className="flex items-center gap-2"><Phone size={14} /> {s.phone}</p>
+              <p className="flex items-center gap-2"><Mail size={14} /> {s.email || 'N/A'}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg rounded-3xl border border-white/10 bg-[#111] p-8 shadow-2xl">
+              <h2 className="text-2xl font-bold text-white mb-6">Add Supplier</h2>
+              <form onSubmit={handleSave} className="space-y-4">
+                <input required placeholder="Supplier Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <input placeholder="Contact Person" value={formData.contact_person} onChange={e => setFormData({...formData, contact_person: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <input required placeholder="Phone" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <input type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold">
+                  <option>Fabrics</option>
+                  <option>Threads & Accessories</option>
+                  <option>Packaging</option>
+                  <option>Other</option>
+                </select>
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 h-12 rounded-xl border border-white/10 font-bold text-white">Cancel</button>
+                  <button type="submit" className="flex-1 h-12 rounded-xl bg-gold font-bold text-black">Save Supplier</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const PurchasesManagement = () => {
+  const [purchases, setPurchases] = useState<any[]>([]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState({ supplier_id: '', supplier_name: '', total: '', date: new Date().toISOString().split('T')[0], notes: '' });
+
+  useEffect(() => {
+    const qP = query(collection(db, 'purchases'), orderBy('date', 'desc'));
+    const unsubP = onSnapshot(qP, (snapshot) => {
+      setPurchases(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubS = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
+      setSuppliers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubP(); unsubS(); };
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const supplier = suppliers.find(s => s.id === formData.supplier_id);
+    try {
+      await addDoc(collection(db, 'purchases'), { 
+        ...formData, 
+        supplier_name: supplier?.name || 'Unknown',
+        total: Number(formData.total), 
+        created_at: serverTimestamp() 
+      });
+      setIsModalOpen(false);
+      setFormData({ supplier_id: '', supplier_name: '', total: '', date: new Date().toISOString().split('T')[0], notes: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'purchases');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-bold text-white">Purchases ({purchases.length})</h3>
+        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 rounded-xl bg-gold px-4 py-2 text-sm font-bold text-black hover:scale-105 transition-all">
+          <Plus size={18} /> New Purchase
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {purchases.map((p) => (
+          <div key={p.id} className="rounded-2xl border border-white/10 bg-white/5 p-6 flex items-center justify-between">
+            <div>
+              <h4 className="font-bold text-white">{p.supplier_name}</h4>
+              <p className="text-xs text-white/40">{p.date}</p>
+              {p.notes && <p className="text-[10px] text-white/20 mt-1 italic">{p.notes}</p>}
+            </div>
+            <div className="text-right">
+              <span className="text-sm font-bold text-white">TSh {p.total?.toLocaleString()}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg rounded-3xl border border-white/10 bg-[#111] p-8 shadow-2xl">
+              <h2 className="text-2xl font-bold text-white mb-6">New Purchase</h2>
+              <form onSubmit={handleSave} className="space-y-4">
+                <select required value={formData.supplier_id} onChange={e => setFormData({...formData, supplier_id: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold">
+                  <option value="">Select Supplier</option>
+                  {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <input required type="number" placeholder="Total Amount" value={formData.total} onChange={e => setFormData({...formData, total: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                <textarea placeholder="Notes (optional)" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} className="w-full rounded-xl border border-white/10 bg-black/40 p-4 text-white outline-none focus:border-gold resize-none" />
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 h-12 rounded-xl border border-white/10 font-bold text-white">Cancel</button>
+                  <button type="submit" className="flex-1 h-12 rounded-xl bg-gold font-bold text-black">Save Purchase</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -549,10 +810,21 @@ const CustomersManagement = () => {
       <h3 className="text-xl font-bold text-white">Customers ({customers.length})</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {customers.map((c) => (
-          <div key={c.id} className="rounded-2xl border border-white/10 bg-white/5 p-6">
+          <div key={c.id} className="rounded-2xl border border-white/10 bg-white/5 p-6 relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-all">
+              <Gift size={48} className="text-gold" />
+            </div>
             <h4 className="font-bold text-white">{c.name}</h4>
             <p className="text-sm text-white/60 mt-1">{c.email}</p>
             <p className="text-sm text-white/60">{c.phone}</p>
+            
+            <div className="mt-4 flex items-center gap-2">
+              <div className="px-3 py-1 rounded-full bg-gold/10 border border-gold/20 flex items-center gap-2">
+                <Gift size={12} className="text-gold" />
+                <span className="text-xs font-bold text-gold">{c.loyalty_points || 0} Points</span>
+              </div>
+            </div>
+
             <div className="mt-4 pt-4 border-t border-white/5 flex justify-between items-center">
               <span className="text-[10px] text-white/40 uppercase font-bold">Orders: {c.order_count || 0}</span>
               <span className="text-[10px] text-white/40 uppercase font-bold">Total Spent: TSh {c.total_spent?.toLocaleString() || 0}</span>
@@ -571,6 +843,15 @@ const ProductsManagement = () => {
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
   const [customUrl, setCustomUrl] = useState('');
+  const [qrOptions, setQrOptions] = useState({
+    theme: 'dark', // 'dark', 'light', 'gold'
+    showPrice: true,
+    showSizes: true,
+    showIcons: true,
+    qrColor: '#1a1208',
+    qrBgColor: '#ffffff',
+    logoUrl: 'https://picsum.photos/seed/kanzu-logo/30/30'
+  });
   const [copied, setCopied] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formData, setFormData] = useState({
@@ -579,7 +860,9 @@ const ProductsManagement = () => {
     category: 'Kanzu za Harusi',
     image_url: '',
     description: '',
-    in_stock: true
+    in_stock: true,
+    stock_quantity: '0',
+    loyalty_points_value: '10'
   });
 
   useEffect(() => {
@@ -597,6 +880,8 @@ const ProductsManagement = () => {
     const data: any = {
       ...formData,
       price: Number(formData.price),
+      stock_quantity: Number(formData.stock_quantity),
+      loyalty_points_value: Number(formData.loyalty_points_value),
     };
 
     if (editingProduct) {
@@ -607,7 +892,7 @@ const ProductsManagement = () => {
     }
     setIsModalOpen(false);
     setEditingProduct(null);
-    setFormData({ name: '', price: '', category: 'Kanzu za Harusi', image_url: '', description: '', in_stock: true });
+    setFormData({ name: '', price: '', category: 'Kanzu za Harusi', image_url: '', description: '', in_stock: true, stock_quantity: '0', loyalty_points_value: '10' });
   };
 
   return (
@@ -636,14 +921,31 @@ const ProductsManagement = () => {
                 }}
               />
             </div>
-            <div className="p-4">
-              <h4 className="font-bold text-white truncate">{p.name}</h4>
-              <p className="text-gold font-bold">TSh {p.price.toLocaleString()}</p>
+              <div className="p-4">
+                <div className="flex justify-between items-start mb-1">
+                  <h4 className="font-bold text-white truncate flex-1">{p.name}</h4>
+                  <span className={cn(
+                    "text-[10px] font-bold px-2 py-0.5 rounded-full",
+                    (p.stock_quantity || 0) > 5 ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"
+                  )}>
+                    {p.stock_quantity || 0} in stock
+                  </span>
+                </div>
+                <p className="text-gold font-bold">TSh {p.price.toLocaleString()}</p>
               <div className="mt-4 flex gap-2">
                 <button 
                   onClick={() => { 
                     setEditingProduct(p); 
-                    setFormData({ name: p.name, price: String(p.price), category: p.category, image_url: p.image_url, description: p.description || '', in_stock: p.in_stock });
+                    setFormData({ 
+                      name: p.name, 
+                      price: String(p.price), 
+                      category: p.category, 
+                      image_url: p.image_url, 
+                      description: p.description || '', 
+                      in_stock: p.in_stock,
+                      stock_quantity: String(p.stock_quantity || 0),
+                      loyalty_points_value: String(p.loyalty_points_value || 10)
+                    });
                     setIsModalOpen(true); 
                   }}
                   className="flex-1 rounded-lg bg-white/5 py-2 text-xs font-bold text-white hover:bg-white/10 transition-all"
@@ -681,126 +983,274 @@ const ProductsManagement = () => {
               initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
               className="relative w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 bg-[#0a0a0a] border border-white/10 rounded-[2.5rem] p-8 md:p-12 shadow-2xl"
             >
-                  {/* Label Preview (The "Bomba" Design) */}
-                  <div className="flex justify-center">
-                    <div id="printable-label" className="w-[320px] bg-[#050505] rounded-[2.5rem] overflow-hidden border-2 border-[#c9a84c] shadow-[0_0_60px_rgba(201,168,76,0.2)] flex flex-col items-center p-8 text-center relative">
-                      {/* Background Pattern Overlay */}
-                      <div className="absolute inset-0 opacity-[0.03] pointer-events-none islamic-pattern-dots" />
-                      <div className="absolute inset-0 opacity-[0.05] pointer-events-none islamic-pattern-lines" />
+              {/* Left Column: Label Preview */}
+              <div className="flex flex-col items-center justify-center gap-6">
+                <div id="printable-label" className={`w-[320px] rounded-[2.5rem] overflow-hidden border-2 flex flex-col items-center p-8 text-center relative transition-all duration-500 ${
+                  qrOptions.theme === 'dark' ? 'bg-[#050505] border-[#c9a84c] shadow-[0_0_60px_rgba(201,168,76,0.2)]' :
+                  qrOptions.theme === 'light' ? 'bg-white border-black/10 shadow-[0_0_60px_rgba(0,0,0,0.05)]' :
+                  'bg-[#c9a84c] border-black/20 shadow-[0_0_60px_rgba(201,168,76,0.4)]'
+                }`}>
+                  {/* Background Pattern Overlay */}
+                  <div className={`absolute inset-0 opacity-[0.03] pointer-events-none islamic-pattern-dots ${qrOptions.theme === 'light' ? 'invert' : ''}`} />
+                  <div className={`absolute inset-0 opacity-[0.05] pointer-events-none islamic-pattern-lines ${qrOptions.theme === 'light' ? 'invert' : ''}`} />
 
                   {/* Decorative Elements */}
-                  <div className="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-[#c9a84c]/20 to-transparent pointer-events-none" />
-                  <div className="absolute top-6 right-8 opacity-40">
-                    <span className="text-4xl filter drop-shadow-[0_0_10px_rgba(201,168,76,0.5)]">🌙</span>
-                  </div>
+                  <div className={`absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-[#c9a84c]/20 to-transparent pointer-events-none ${qrOptions.theme === 'gold' ? 'from-white/20' : ''}`} />
+                  {qrOptions.showIcons && (
+                    <div className="absolute top-6 right-8 opacity-40">
+                      <span className={`text-4xl filter drop-shadow-[0_0_10px_rgba(201,168,76,0.5)] ${qrOptions.theme === 'light' ? 'text-black' : ''}`}>🌙</span>
+                    </div>
+                  )}
 
                   {/* Header */}
                   <div className="mb-8 z-10">
                     <div className="flex items-center justify-center gap-3 mb-2">
-                      <span className="text-3xl filter drop-shadow-[0_0_8px_rgba(201,168,76,0.3)]">🕌</span>
-                      <h2 className="font-serif text-2xl font-bold text-[#c9a84c] tracking-tight">Kanzu Palace</h2>
+                      {qrOptions.showIcons && <span className={`text-3xl filter drop-shadow-[0_0_8px_rgba(201,168,76,0.3)] ${qrOptions.theme === 'light' ? 'text-black' : ''}`}>🕌</span>}
+                      <h2 className={`font-serif text-2xl font-bold tracking-tight ${
+                        qrOptions.theme === 'light' ? 'text-black' : 
+                        qrOptions.theme === 'gold' ? 'text-black' : 'text-[#c9a84c]'
+                      }`}>Kanzu Palace</h2>
                     </div>
-                    <div className="h-[1px] w-24 bg-gradient-to-r from-transparent via-[#c9a84c]/50 to-transparent mx-auto mb-2" />
-                    <p className="text-[9px] font-bold text-white/50 uppercase tracking-[0.3em]">Lebo ya Bidhaa • Product Label</p>
+                    <div className={`h-[1px] w-24 mx-auto mb-2 ${
+                      qrOptions.theme === 'light' ? 'bg-black/10' : 
+                      qrOptions.theme === 'gold' ? 'bg-black/20' : 'bg-gradient-to-r from-transparent via-[#c9a84c]/50 to-transparent'
+                    }`} />
+                    <p className={`text-[9px] font-bold uppercase tracking-[0.3em] ${
+                      qrOptions.theme === 'light' ? 'text-black/40' : 
+                      qrOptions.theme === 'gold' ? 'text-black/40' : 'text-white/50'
+                    }`}>Lebo ya Bidhaa • Product Label</p>
                   </div>
 
                   {/* Product Info */}
                   <div className="mb-10 z-10">
-                    <p className="text-[11px] font-bold text-[#c9a84c] uppercase tracking-[0.4em] mb-3 opacity-80">{qrProduct.category}</p>
-                    <h3 className="text-3xl font-serif font-bold text-white tracking-[0.1em] uppercase leading-tight drop-shadow-lg">{qrProduct.name}</h3>
+                    <p className={`text-[11px] font-bold uppercase tracking-[0.4em] mb-3 opacity-80 ${
+                      qrOptions.theme === 'light' ? 'text-black/60' : 
+                      qrOptions.theme === 'gold' ? 'text-black/60' : 'text-[#c9a84c]'
+                    }`}>{qrProduct.category}</p>
+                    <h3 className={`text-3xl font-serif font-bold tracking-[0.1em] uppercase leading-tight drop-shadow-lg ${
+                      qrOptions.theme === 'light' ? 'text-black' : 
+                      qrOptions.theme === 'gold' ? 'text-black' : 'text-white'
+                    }`}>{qrProduct.name}</h3>
                   </div>
 
                   {/* QR Code Container */}
-                  <div className="relative p-7 bg-white rounded-[2.5rem] shadow-[0_0_40px_rgba(201,168,76,0.15)] mb-10 group transition-transform hover:scale-105 duration-500">
-                    <div className="absolute inset-0 border-[3px] border-[#c9a84c]/30 rounded-[2.5rem] -m-1.5" />
+                  <div className={`relative p-7 rounded-[2.5rem] mb-10 group transition-transform hover:scale-105 duration-500 ${
+                    qrOptions.theme === 'light' ? 'bg-black/5' : 'bg-white shadow-[0_0_40px_rgba(201,168,76,0.15)]'
+                  }`}>
+                    <div className={`absolute inset-0 border-[3px] rounded-[2.5rem] -m-1.5 ${
+                      qrOptions.theme === 'light' ? 'border-black/5' : 'border-[#c9a84c]/30'
+                    }`} />
                     <QRCodeSVG 
                       value={customUrl || `${window.location.origin}/product/${qrProduct.id}`} 
                       size={170}
                       level="H"
                       includeMargin={false}
-                      fgColor="#1a1208"
-                      imageSettings={{
-                        src: "https://picsum.photos/seed/kanzu-logo/60/60",
+                      fgColor={qrOptions.qrColor}
+                      bgColor={qrOptions.qrBgColor}
+                      imageSettings={qrOptions.logoUrl ? {
+                        src: qrOptions.logoUrl,
                         x: undefined,
                         y: undefined,
                         height: 36,
                         width: 36,
                         excavate: true,
-                      }}
+                      } : undefined}
                     />
                   </div>
 
                   {/* Instructions */}
                   <div className="mb-10 px-6 z-10">
-                    <div className="inline-block px-4 py-1.5 rounded-full bg-[#c9a84c]/10 border border-[#c9a84c]/20 mb-3">
-                      <p className="text-[9px] font-bold text-[#c9a84c] uppercase tracking-widest">Scan & Discover</p>
+                    <div className={`inline-block px-4 py-1.5 rounded-full mb-3 ${
+                      qrOptions.theme === 'light' ? 'bg-black/5 border border-black/10' : 
+                      qrOptions.theme === 'gold' ? 'bg-black/5 border border-black/10' : 'bg-[#c9a84c]/10 border border-[#c9a84c]/20'
+                    }`}>
+                      <p className={`text-[9px] font-bold uppercase tracking-widest ${
+                        qrOptions.theme === 'light' ? 'text-black' : 
+                        qrOptions.theme === 'gold' ? 'text-black' : 'text-[#c9a84c]'
+                      }`}>Scan & Discover</p>
                     </div>
-                    <p className="text-[11px] text-white/70 leading-relaxed font-medium">
+                    <p className={`text-[11px] leading-relaxed font-medium ${
+                      qrOptions.theme === 'light' ? 'text-black/70' : 
+                      qrOptions.theme === 'gold' ? 'text-black/70' : 'text-white/70'
+                    }`}>
                       Scan QR kuona bidhaa hii mtandaoni<br />
                       au chagua size na kuagiza
                     </p>
                   </div>
 
                   {/* Price & Sizes */}
-                  <div className="w-full pt-8 border-t border-white/10 flex flex-col items-center z-10">
-                    <div className="flex flex-col items-center gap-1 mb-6">
-                      <div className="flex items-baseline gap-3">
-                        <span className="text-3xl font-bold text-[#c9a84c] drop-shadow-[0_0_10px_rgba(201,168,76,0.3)]">TSh {qrProduct.price.toLocaleString()}</span>
+                  <div className={`w-full pt-8 border-t flex flex-col items-center z-10 ${
+                    qrOptions.theme === 'light' ? 'border-black/10' : 'border-white/10'
+                  }`}>
+                    {qrOptions.showPrice && (
+                      <div className="flex flex-col items-center gap-1 mb-6">
+                        <div className="flex items-baseline gap-3">
+                          <span className={`text-3xl font-bold ${
+                            qrOptions.theme === 'light' ? 'text-black' : 
+                            qrOptions.theme === 'gold' ? 'text-black' : 'text-[#c9a84c] drop-shadow-[0_0_10px_rgba(201,168,76,0.3)]'
+                          }`}>TSh {qrProduct.price.toLocaleString()}</span>
+                          {qrProduct.old_price && (
+                            <span className={`text-sm line-through ${
+                              qrOptions.theme === 'light' ? 'text-black/30 decoration-black/50' : 'text-white/30 decoration-[#c9a84c]/50'
+                            }`}>TSh {qrProduct.old_price.toLocaleString()}</span>
+                          )}
+                        </div>
                         {qrProduct.old_price && (
-                          <span className="text-sm text-white/30 line-through decoration-[#c9a84c]/50">TSh {qrProduct.old_price.toLocaleString()}</span>
+                          <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-500 text-[10px] font-bold uppercase tracking-tighter">
+                            Save {Math.round(((qrProduct.old_price - qrProduct.price) / qrProduct.old_price) * 100)}% OFF
+                          </span>
                         )}
                       </div>
-                      {qrProduct.old_price && (
-                        <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-500 text-[10px] font-bold uppercase tracking-tighter">
-                          Save {Math.round(((qrProduct.old_price - qrProduct.price) / qrProduct.old_price) * 100)}% OFF
-                        </span>
-                      )}
-                    </div>
+                    )}
                     
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => (
-                        <div key={s} className="w-10 h-10 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-[11px] font-bold text-white/60 hover:border-[#c9a84c]/50 hover:text-[#c9a84c] transition-colors">
-                          {s}
-                        </div>
-                      ))}
-                    </div>
+                    {qrOptions.showSizes && (
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => (
+                          <div key={s} className={`w-10 h-10 rounded-xl border flex items-center justify-center text-[11px] font-bold transition-colors ${
+                            qrOptions.theme === 'light' ? 'border-black/10 bg-black/5 text-black/50' : 
+                            qrOptions.theme === 'gold' ? 'border-black/10 bg-black/5 text-black/50' : 'border-white/10 bg-white/5 text-white/60'
+                          }`}>
+                            {s}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Footer URL */}
                   <div className="mt-10 opacity-30">
-                    <p className="text-[8px] font-mono text-white tracking-[0.3em] uppercase">
+                    <p className={`text-[8px] font-mono tracking-[0.3em] uppercase ${
+                      qrOptions.theme === 'light' ? 'text-black' : 'text-white'
+                    }`}>
                       {window.location.host} • ID: {qrProduct.id.substring(0, 8)}
                     </p>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-4 w-full max-w-[320px]">
+                  <button 
+                    onClick={() => {
+                      const url = `${window.location.origin}/product/${qrProduct.id}`;
+                      navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                  >
+                    {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
+                    Copy Link
+                  </button>
+                  <button 
+                    onClick={() => setIsQRModalOpen(false)}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                  >
+                    Funga
+                  </button>
+                </div>
               </div>
 
-              {/* Controls */}
-              <div className="flex flex-col justify-center">
+              {/* Right Column: Controls */}
+              <div className="flex flex-col h-full max-h-[80vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="mb-8">
-                  <h3 className="text-2xl font-bold text-white mb-2">Lebo ya Kanzu</h3>
-                  <p className="text-white/50 mb-6">Hii ni lebo ya kisasa (Premium Label) kwa ajili ya kuweka kwenye kanzu zako dukani. Wateja wanaweza kuscan na kuona maelezo yote.</p>
+                  <h3 className="text-2xl font-bold text-white mb-2">Customize Label</h3>
+                  <p className="text-white/50 mb-6 text-sm">Chagua muonekano wa lebo yako kabla ya ku-print.</p>
                   
-                  <div className="space-y-4">
+                  <div className="space-y-6">
+                    {/* Theme Selection */}
+                    <div>
+                      <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-3">Theme / Rangi ya Lebo</label>
+                      <div className="grid grid-cols-3 gap-3">
+                        {[
+                          { id: 'dark', label: 'Dark', class: 'bg-black border-white/20' },
+                          { id: 'light', label: 'Light', class: 'bg-white border-black/10' },
+                          { id: 'gold', label: 'Gold', class: 'bg-[#c9a84c] border-black/10' }
+                        ].map(t => (
+                          <button 
+                            key={t.id}
+                            onClick={() => setQrOptions(prev => ({ ...prev, theme: t.id }))}
+                            className={`flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all ${
+                              qrOptions.theme === t.id ? 'border-gold bg-gold/10' : 'border-transparent bg-white/5'
+                            }`}
+                          >
+                            <div className={`w-full h-8 rounded-lg border ${t.class}`} />
+                            <span className="text-[10px] font-bold text-white">{t.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* QR Colors */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-2">QR Color</label>
+                        <input 
+                          type="color" 
+                          value={qrOptions.qrColor}
+                          onChange={(e) => setQrOptions(prev => ({ ...prev, qrColor: e.target.value }))}
+                          className="w-full h-10 bg-transparent cursor-pointer rounded-lg overflow-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-2">QR Background</label>
+                        <input 
+                          type="color" 
+                          value={qrOptions.qrBgColor}
+                          onChange={(e) => setQrOptions(prev => ({ ...prev, qrBgColor: e.target.value }))}
+                          className="w-full h-10 bg-transparent cursor-pointer rounded-lg overflow-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Logo URL */}
+                    <div>
+                      <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-2">Logo URL (Optional)</label>
+                      <input 
+                        type="text" 
+                        value={qrOptions.logoUrl}
+                        onChange={(e) => setQrOptions(prev => ({ ...prev, logoUrl: e.target.value }))}
+                        placeholder="Link ya logo yako..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:border-[#c9a84c] transition-all"
+                      />
+                    </div>
+
+                    {/* Toggles */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { id: 'showPrice', label: 'Onyesha Bei' },
+                        { id: 'showSizes', label: 'Onyesha Size' },
+                        { id: 'showIcons', label: 'Onyesha Icons' }
+                      ].map(opt => (
+                        <button 
+                          key={opt.id}
+                          onClick={() => setQrOptions(prev => ({ ...prev, [opt.id]: !prev[opt.id as keyof typeof prev] }))}
+                          className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${
+                            qrOptions[opt.id as keyof typeof qrOptions] ? 'border-gold bg-gold/10 text-gold' : 'border-white/10 bg-white/5 text-white/40'
+                          }`}
+                        >
+                          <span className="text-[10px] font-bold uppercase tracking-widest">{opt.label}</span>
+                          <div className={`w-2 h-2 rounded-full ${qrOptions[opt.id as keyof typeof qrOptions] ? 'bg-gold shadow-[0_0_8px_rgba(201,168,76,0.5)]' : 'bg-white/20'}`} />
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Custom Link */}
                     <div>
                       <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-2">Custom Link (Optional)</label>
                       <input 
                         type="text" 
                         value={customUrl}
                         onChange={(e) => setCustomUrl(e.target.value)}
-                        placeholder="Weka link nyingine hapa kama unataka..."
+                        placeholder="Weka link nyingine hapa..."
                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:border-[#c9a84c] transition-all"
                       />
-                      <p className="text-[9px] text-white/30 mt-2">Acha wazi ili kutumia link ya kawaida ya bidhaa hii.</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4">
+                <div className="mt-auto pt-6 border-t border-white/10 space-y-6">
                   <button 
                     onClick={() => {
                       const printContent = document.getElementById('printable-label');
-                      const windowUrl = window.location.href;
                       const uniqueName = `label-${qrProduct.id}`;
                       const printWindow = window.open('', uniqueName, 'width=600,height=800');
                       if (printWindow) {
@@ -815,9 +1265,11 @@ const ProductsManagement = () => {
                                   body { margin: 0; padding: 0; background: white; }
                                   #printable-label { 
                                     box-shadow: none !important; 
-                                    border: 2px solid #c9a84c !important;
+                                    border: 2px solid ${qrOptions.theme === 'dark' ? '#c9a84c' : qrOptions.theme === 'light' ? '#000000' : '#000000'} !important;
                                     -webkit-print-color-adjust: exact;
                                     print-color-adjust: exact;
+                                    width: 320px !important;
+                                    margin: auto;
                                   }
                                 }
                                 body { font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f0f0f0; }
@@ -830,6 +1282,7 @@ const ProductsManagement = () => {
                                   background-image: linear-gradient(45deg, #c9a84c 25%, transparent 25%, transparent 50%, #c9a84c 50%, #c9a84c 75%, transparent 75%, transparent);
                                   background-size: 40px 40px;
                                 }
+                                .invert { filter: invert(1); }
                               </style>
                             </head>
                             <body>
@@ -838,7 +1291,7 @@ const ProductsManagement = () => {
                                 setTimeout(() => {
                                   window.print();
                                   window.close();
-                                }, 800);
+                                }, 1000);
                               </script>
                             </body>
                           </html>
@@ -849,38 +1302,17 @@ const ProductsManagement = () => {
                     className="flex items-center justify-center gap-3 w-full rounded-2xl bg-[#c9a84c] py-4 font-bold text-black hover:scale-[1.02] active:scale-[0.98] transition-all"
                   >
                     <Printer size={20} />
-                    Print Lebo (Dukani)
+                    Print Lebo Sasa
                   </button>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <button 
-                      onClick={() => {
-                        const url = `${window.location.origin}/product/${qrProduct.id}`;
-                        navigator.clipboard.writeText(url);
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      }}
-                      className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
-                    >
-                      {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
-                      Copy Link
-                    </button>
-                    <button 
-                      onClick={() => setIsQRModalOpen(false)}
-                      className="flex items-center justify-center gap-2 rounded-2xl bg-white/5 py-4 text-sm font-bold text-white hover:bg-white/10 transition-all"
-                    >
-                      Funga
-                    </button>
+                  <div className="p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <h4 className="text-xs font-bold text-[#c9a84c] uppercase tracking-widest mb-2">Maelekezo kwa Staff</h4>
+                    <ul className="text-xs text-white/40 space-y-2">
+                      <li>• Print lebo hii kwenye karatasi ngumu (Cardstock).</li>
+                      <li>• Bandika lebo kwenye kanzu husika kwa kutumia kamba ya hariri.</li>
+                      <li>• Hakikisha QR code inaonekana vizuri bila kukunja.</li>
+                    </ul>
                   </div>
-                </div>
-
-                <div className="mt-8 p-6 rounded-2xl bg-white/5 border border-white/10">
-                  <h4 className="text-xs font-bold text-[#c9a84c] uppercase tracking-widest mb-2">Maelekezo kwa Staff</h4>
-                  <ul className="text-xs text-white/40 space-y-2">
-                    <li>• Print lebo hii kwenye karatasi ngumu (Cardstock).</li>
-                    <li>• Bandika lebo kwenye kanzu husika kwa kutumia kamba ya hariri.</li>
-                    <li>• Hakikisha QR code inaonekana vizuri bila kukunja.</li>
-                  </ul>
                 </div>
               </div>
             </motion.div>
@@ -922,6 +1354,16 @@ const ProductsManagement = () => {
                     </select>
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-white/40 uppercase">Stock Quantity</label>
+                    <input required type="number" value={formData.stock_quantity} onChange={e => setFormData({...formData, stock_quantity: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-white/40 uppercase">Loyalty Points</label>
+                    <input required type="number" value={formData.loyalty_points_value} onChange={e => setFormData({...formData, loyalty_points_value: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-white/40 uppercase">Image URL</label>
                   <input required value={formData.image_url} onChange={e => setFormData({...formData, image_url: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-gold" />
@@ -960,10 +1402,91 @@ const ProductsManagement = () => {
   );
 };
 
+const ExpensesManagement = () => {
+  const [expenses, setExpenses] = useState<any[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState({ title: '', amount: '', category: 'Material', date: new Date().toISOString().split('T')[0] });
+
+  useEffect(() => {
+    const q = query(collection(db, 'expenses'), orderBy('date', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'expenses');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const data = { ...formData, amount: Number(formData.amount), created_at: serverTimestamp() };
+    await addDoc(collection(db, 'expenses'), data);
+    setIsModalOpen(false);
+    setFormData({ title: '', amount: '', category: 'Material', date: new Date().toISOString().split('T')[0] });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-bold text-white">Expenses ({expenses.length})</h3>
+        <button 
+          onClick={() => setIsModalOpen(true)}
+          className="flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-bold text-white hover:scale-105 transition-all"
+        >
+          <Plus size={18} /> Add Expense
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {expenses.map((exp) => (
+          <div key={exp.id} className="rounded-2xl border border-white/10 bg-white/5 p-6 flex items-center justify-between">
+            <div>
+              <h4 className="font-bold text-white">{exp.title}</h4>
+              <p className="text-xs text-white/40">{exp.category} • {exp.date}</p>
+            </div>
+            <div className="text-right">
+              <span className="text-sm font-bold text-red-500">- TSh {exp.amount?.toLocaleString()}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg rounded-3xl border border-white/10 bg-[#111] p-8 shadow-2xl">
+              <h2 className="text-2xl font-bold text-white mb-6">Add Expense</h2>
+              <form onSubmit={handleSave} className="space-y-4">
+                <input required placeholder="Title" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-red-500" />
+                <input required type="number" placeholder="Amount" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-red-500" />
+                <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-red-500">
+                  <option>Material</option>
+                  <option>Rent</option>
+                  <option>Electricity</option>
+                  <option>Staff Salary</option>
+                  <option>Marketing</option>
+                  <option>Other</option>
+                </select>
+                <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-white outline-none focus:border-red-500" />
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 h-12 rounded-xl border border-white/10 font-bold text-white">Cancel</button>
+                  <button type="submit" className="flex-1 h-12 rounded-xl bg-red-500 font-bold text-white">Save Expense</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const Overview = () => {
   const [stats, setStats] = useState({
     totalOrders: 0,
     revenue: 0,
+    expenses: 0,
     pending: 0,
     products: 0,
     lowStock: 0,
@@ -972,7 +1495,6 @@ const Overview = () => {
     avgOrderValue: 0
   });
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
-
   const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
@@ -988,16 +1510,6 @@ const Overview = () => {
         return orderDate && orderDate >= today;
       }).length;
 
-      // Group by date for chart
-      const grouped = orders.reduce((acc: any, o: any) => {
-        const date = o.created_at?.toDate()?.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) || 'N/A';
-        acc[date] = (acc[date] || 0) + (o.total || 0);
-        return acc;
-      }, {});
-      
-      const chart = Object.entries(grouped).map(([name, sales]) => ({ name, sales })).slice(-7);
-      setChartData(chart);
-
       setStats(prev => ({ 
         ...prev, 
         totalOrders: orders.length, 
@@ -1011,9 +1523,17 @@ const Overview = () => {
       handleFirestoreError(error, OperationType.LIST, 'orders');
     });
 
+    const unsubExpenses = onSnapshot(collection(db, 'expenses'), (snap) => {
+      const exps = snap.docs.map(d => d.data());
+      const totalExp = exps.reduce((acc, e: any) => acc + (e.amount || 0), 0);
+      setStats(prev => ({ ...prev, expenses: totalExp }));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'expenses');
+    });
+
     const unsubProds = onSnapshot(collection(db, 'products'), (snap) => {
       const prods = snap.docs.map(d => d.data());
-      const lowStock = prods.filter((p: any) => !p.in_stock).length;
+      const lowStock = prods.filter((p: any) => (p.stock_quantity || 0) <= 5).length;
       setStats(prev => ({ ...prev, products: snap.size, lowStock }));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'products');
@@ -1025,61 +1545,97 @@ const Overview = () => {
       handleFirestoreError(error, OperationType.LIST, 'staff');
     });
 
-    return () => { unsubOrders(); unsubProds(); unsubStaff(); };
-  }, []);
+    // Combined chart data
+    const unsubCombined = onSnapshot(query(collection(db, 'orders'), orderBy('created_at', 'desc')), (orderSnap) => {
+      onSnapshot(query(collection(db, 'expenses'), orderBy('date', 'desc')), (expSnap) => {
+        const orders = orderSnap.docs.map(d => d.data());
+        const expenses = expSnap.docs.map(d => d.data());
+        
+        const grouped: Record<string, { name: string; sales: number; expenses: number }> = {};
+        
+        // Last 7 days
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          grouped[dateStr] = { name: dateStr, sales: 0, expenses: 0 };
+        }
 
-  const data = [
-    { name: '21 Feb', sales: 0 },
-    { name: '25 Feb', sales: 0 },
-    { name: '1 Mac', sales: 0 },
-    { name: '5 Mac', sales: 0 },
-    { name: '9 Mac', sales: 0 },
-    { name: '13 Mac', sales: 0 },
-    { name: '17 Mac', sales: 0 },
-    { name: '21 Mac', sales: 0 },
-  ];
+        orders.forEach((o: any) => {
+          const dateStr = o.created_at?.toDate()?.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          if (grouped[dateStr]) grouped[dateStr].sales += (o.total || 0);
+        });
+
+        expenses.forEach((e: any) => {
+          const d = new Date(e.date);
+          const dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          if (grouped[dateStr]) grouped[dateStr].expenses += (e.amount || 0);
+        });
+
+        setChartData(Object.values(grouped));
+      });
+    });
+
+    return () => { unsubOrders(); unsubExpenses(); unsubProds(); unsubStaff(); unsubCombined(); };
+  }, []);
 
   return (
     <div className="space-y-6">
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
         <StatCard title="Jumla Oda" value={stats.totalOrders} icon={<ShoppingBag size={20} className="text-amber-500" />} />
-        <StatCard title="Mapato (Mwezi)" value={`TSh ${stats.revenue.toLocaleString()}`} icon={<Wallet size={20} className="text-green-500" />} />
+        <StatCard title="Mapato" value={`TSh ${stats.revenue.toLocaleString()}`} icon={<Wallet size={20} className="text-green-500" />} />
+        <StatCard title="Matumizi" value={`TSh ${stats.expenses.toLocaleString()}`} icon={<CreditCard size={20} className="text-red-500" />} />
+        <StatCard title="Faida" value={`TSh ${(stats.revenue - stats.expenses).toLocaleString()}`} icon={<TrendingUp size={20} className="text-emerald-500" />} />
         <StatCard title="Zinasubiri" value={stats.pending} icon={<History size={20} className="text-amber-500" />} />
-        <StatCard title="Bidhaa" value={stats.products} icon={<Package size={20} className="text-blue-400" />} />
-        <StatCard title="Hisa Ndogo" value={stats.lowStock} icon={<AlertCircle size={20} className="text-red-500" />} />
-        <StatCard title="Wafanyakazi" value={stats.staffCount} icon={<Users size={20} className="text-purple-500" />} />
+        <StatCard title="Hisa Chache" value={stats.lowStock} icon={<AlertCircle size={20} className="text-red-500" />} />
         <StatCard title="Oda Leo" value={stats.ordersToday} icon={<ShoppingBag size={20} className="text-blue-500" />} />
-        <StatCard title="Wastani kwa Oda" value={`TSh ${Math.round(stats.avgOrderValue).toLocaleString()}`} icon={<BarChart3 size={20} className="text-blue-400" />} />
+        <StatCard title="Wastani Oda" value={`TSh ${Math.round(stats.avgOrderValue).toLocaleString()}`} icon={<BarChart3 size={20} className="text-blue-400" />} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 rounded-2xl border border-white/5 bg-[#111] p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <BarChart3 size={16} className="text-blue-400" />
-                Mapato - Siku 30 Zilizopita
-              </h3>
-              <p className="text-[10px] text-white/40 mt-1">TSh 0 mwezi huu · <span className="text-green-500">↑0% wiki hii</span></p>
+              <h3 className="text-lg font-bold text-white">Revenue vs Expenses</h3>
+              <p className="text-xs text-white/40">Mwenendo wa mauzo na matumizi kwa siku 7 zilizopita</p>
             </div>
-            <div className="flex gap-1 bg-black/40 p-1 rounded-lg">
-              <button className="px-3 py-1 text-[10px] font-bold bg-[#c9a84c] text-black rounded-md">30D</button>
-              <button className="px-3 py-1 text-[10px] font-bold text-white/40 hover:text-white">7D</button>
+            <div className="flex gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-gold" />
+                <span className="text-[10px] font-bold text-white/40 uppercase">Sales</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500" />
+                <span className="text-[10px] font-bold text-white/40 uppercase">Expenses</span>
+              </div>
             </div>
           </div>
-          <div className="h-64 w-full">
+          
+          <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
-                <XAxis dataKey="name" stroke="#444" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="#444" fontSize={10} tickLine={false} axisLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#000', border: '1px solid #222', borderRadius: '8px' }}
-                  itemStyle={{ color: '#c9a84c', fontSize: '12px' }}
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#ffffff40', fontSize: 10, fontWeight: 'bold' }} 
+                  dy={10}
                 />
-                <Line type="monotone" dataKey="sales" stroke="#c9a84c" strokeWidth={2} dot={{ fill: '#c9a84c', r: 3 }} />
-              </LineChart>
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#ffffff40', fontSize: 10, fontWeight: 'bold' }}
+                  tickFormatter={(value) => `TSh ${value >= 1000 ? (value/1000) + 'k' : value}`}
+                />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#111', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
+                  itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                />
+                <Bar dataKey="sales" fill="#c9a84c" radius={[4, 4, 0, 0]} barSize={20} />
+                <Bar dataKey="expenses" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={20} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
@@ -1088,19 +1644,29 @@ const Overview = () => {
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <ShoppingBag size={16} className="text-amber-500" />
-              Oda kwa Siku
+              Oda za Hivi Karibuni
             </h3>
             <span className="text-[10px] text-white/40">Jumla oda {stats.totalOrders}</span>
           </div>
-          <div className="h-64 w-full flex items-center justify-center">
-             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
-                <XAxis dataKey="name" stroke="#444" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="#444" fontSize={10} tickLine={false} axisLine={false} />
-                <Bar dataKey="sales" fill="#c9a84c" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="space-y-4">
+            {recentOrders.map((o) => (
+              <div key={o.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                <div>
+                  <p className="text-xs font-bold text-white">{o.customer_name}</p>
+                  <p className="text-[10px] text-white/40">{o.order_number}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-gold">TSh {o.total?.toLocaleString()}</p>
+                  <p className="text-[10px] text-white/40">{o.order_status}</p>
+                </div>
+              </div>
+            ))}
+            {recentOrders.length === 0 && (
+              <div className="text-center py-8">
+                <ShoppingBag size={32} className="mx-auto text-white/10 mb-2" />
+                <p className="text-xs text-white/20">Hakuna oda za hivi karibuni</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1762,16 +2328,26 @@ const DeliveryManagement = () => {
 
 const POSManagement = () => {
   const [products, setProducts] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [promoCodes, setPromoCodes] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   const [search, setSearch] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
+  const [promoCode, setPromoCode] = useState('');
+  const [appliedPromo, setAppliedPromo] = useState<any>(null);
+  const [usePoints, setUsePoints] = useState(false);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'products'), (snap) => {
+    const unsubProds = onSnapshot(collection(db, 'products'), (snap) => {
       setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    return () => unsub();
+    const unsubCusts = onSnapshot(collection(db, 'customers'), (snap) => {
+      setCustomers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    const unsubPromo = onSnapshot(collection(db, 'promo_codes'), (snap) => {
+      setPromoCodes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => { unsubProds(); unsubCusts(); unsubPromo(); };
   }, []);
 
   const addToCart = (product: any) => {
@@ -1787,7 +2363,28 @@ const POSManagement = () => {
     setCart(cart.filter(item => item.id !== id));
   };
 
-  const total = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  const subtotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  let discount = 0;
+  if (appliedPromo) {
+    if (appliedPromo.type === 'percentage') {
+      discount = (subtotal * appliedPromo.value) / 100;
+    } else {
+      discount = appliedPromo.value;
+    }
+  }
+
+  const pointsValue = usePoints && selectedCustomer ? Math.min(selectedCustomer.loyalty_points || 0, subtotal - discount) : 0;
+  const total = Math.max(0, subtotal - discount - pointsValue);
+
+  const applyPromo = () => {
+    const promo = promoCodes.find(p => p.code.toUpperCase() === promoCode.toUpperCase() && p.active);
+    if (promo) {
+      setAppliedPromo(promo);
+      setPromoCode('');
+    } else {
+      alert('Invalid or inactive promo code');
+    }
+  };
 
   const generateReceipt = (order: any) => {
     const doc = new jsPDF({
@@ -1815,6 +2412,16 @@ const POSManagement = () => {
     });
     
     doc.line(5, y + 2, 75, y + 2);
+    if (discount > 0) {
+      doc.text('Discount:', 5, y + 7);
+      doc.text(`-TSh ${discount.toLocaleString()}`, 75, y + 7, { align: 'right' });
+      y += 5;
+    }
+    if (pointsValue > 0) {
+      doc.text('Points Used:', 5, y + 7);
+      doc.text(`-TSh ${pointsValue.toLocaleString()}`, 75, y + 7, { align: 'right' });
+      y += 5;
+    }
     doc.setFontSize(10);
     doc.text('TOTAL:', 5, y + 8);
     doc.text(`TSh ${order.total.toLocaleString()}`, 75, y + 8, { align: 'right' });
@@ -1830,15 +2437,20 @@ const POSManagement = () => {
     if (cart.length === 0) return;
     try {
       const orderData = {
-        customer_name: customerName || 'Walk-in Customer',
-        customer_phone: customerPhone || 'N/A',
+        customer_name: selectedCustomer?.name || 'Walk-in Customer',
+        customer_phone: selectedCustomer?.phone || 'N/A',
+        customer_id: selectedCustomer?.id || null,
         items: cart.map(item => ({
           id: item.id,
           name: item.name,
           price: item.price,
           quantity: item.quantity,
-          image_url: item.image_url
+          image_url: item.image_url,
+          loyalty_points_value: item.loyalty_points_value || 10
         })),
+        subtotal,
+        discount,
+        points_used: pointsValue,
         total,
         order_status: 'Imekamilika',
         payment_status: 'Imelipwa',
@@ -1847,11 +2459,38 @@ const POSManagement = () => {
         created_at: serverTimestamp(),
         type: 'pos'
       };
+      
       await addDoc(collection(db, 'orders'), orderData);
+
+      // Update Customer Points if applicable
+      if (selectedCustomer) {
+        const customerRef = doc(db, 'customers', selectedCustomer.id);
+        const newPoints = (selectedCustomer.loyalty_points || 0) - pointsValue + (orderData.items.reduce((acc, i) => acc + (i.loyalty_points_value * i.quantity), 0));
+        await updateDoc(customerRef, {
+          loyalty_points: Math.max(0, newPoints),
+          total_spent: (selectedCustomer.total_spent || 0) + total,
+          order_count: (selectedCustomer.order_count || 0) + 1
+        });
+      }
+
+      // Update Stock
+      for (const item of cart) {
+        const productRef = doc(db, 'products', item.id);
+        const productSnap = await getDoc(productRef);
+        if (productSnap.exists()) {
+          const currentStock = productSnap.data().stock_quantity || 0;
+          await updateDoc(productRef, {
+            stock_quantity: Math.max(0, currentStock - item.quantity),
+            in_stock: (currentStock - item.quantity) > 0
+          });
+        }
+      }
+
       generateReceipt(orderData);
       setCart([]);
-      setCustomerName('');
-      setCustomerPhone('');
+      setSelectedCustomer(null);
+      setAppliedPromo(null);
+      setUsePoints(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'orders');
     }
@@ -1918,13 +2557,73 @@ const POSManagement = () => {
         </div>
         <div className="p-6 bg-white/5 border-t border-white/5 space-y-4">
           <div className="space-y-2">
-            <input placeholder="Customer Name" value={customerName} onChange={e => setCustomerName(e.target.value)} className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-4 text-xs text-white outline-none focus:border-gold" />
-            <input placeholder="Customer Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-4 text-xs text-white outline-none focus:border-gold" />
+            <select 
+              value={selectedCustomer?.id || ''} 
+              onChange={e => setSelectedCustomer(customers.find(c => c.id === e.target.value))}
+              className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-4 text-xs text-white outline-none focus:border-gold"
+            >
+              <option value="">Select Customer (Walk-in)</option>
+              {customers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>)}
+            </select>
+            
+            {selectedCustomer && (
+              <div className="flex items-center justify-between p-2 rounded-lg bg-gold/5 border border-gold/10">
+                <div className="flex items-center gap-2">
+                  <Gift size={14} className="text-gold" />
+                  <span className="text-[10px] font-bold text-gold">{selectedCustomer.loyalty_points || 0} Points Available</span>
+                </div>
+                <button 
+                  onClick={() => setUsePoints(!usePoints)}
+                  className={cn(
+                    "px-2 py-1 rounded text-[10px] font-bold uppercase transition-all",
+                    usePoints ? "bg-gold text-black" : "bg-white/5 text-white/40"
+                  )}
+                >
+                  {usePoints ? 'Redeeming' : 'Redeem'}
+                </button>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <input 
+                placeholder="Promo Code" 
+                value={promoCode} 
+                onChange={e => setPromoCode(e.target.value)} 
+                className="h-10 flex-1 rounded-lg border border-white/10 bg-black/40 px-4 text-xs text-white outline-none focus:border-gold" 
+              />
+              <button onClick={applyPromo} className="px-4 rounded-lg bg-white/5 text-xs font-bold text-white hover:bg-white/10">Apply</button>
+            </div>
+            {appliedPromo && (
+              <div className="flex items-center justify-between p-2 rounded-lg bg-green-500/5 border border-green-500/10">
+                <span className="text-[10px] font-bold text-green-500">Promo: {appliedPromo.code} (-{appliedPromo.type === 'percentage' ? `${appliedPromo.value}%` : `TSh ${appliedPromo.value}`})</span>
+                <button onClick={() => setAppliedPromo(null)} className="text-green-500 hover:scale-110"><X size={12} /></button>
+              </div>
+            )}
           </div>
-          <div className="flex items-center justify-between pt-2">
-            <p className="text-sm font-bold text-white">Total</p>
-            <p className="text-xl font-bold text-gold">TSh {total.toLocaleString()}</p>
+          
+          <div className="space-y-1 pt-2 border-t border-white/5">
+            <div className="flex items-center justify-between text-[10px] text-white/40">
+              <p>Subtotal</p>
+              <p>TSh {subtotal.toLocaleString()}</p>
+            </div>
+            {discount > 0 && (
+              <div className="flex items-center justify-between text-[10px] text-green-500">
+                <p>Discount</p>
+                <p>-TSh {discount.toLocaleString()}</p>
+              </div>
+            )}
+            {pointsValue > 0 && (
+              <div className="flex items-center justify-between text-[10px] text-gold">
+                <p>Points Redeemed</p>
+                <p>-TSh {pointsValue.toLocaleString()}</p>
+              </div>
+            )}
+            <div className="flex items-center justify-between pt-2">
+              <p className="text-sm font-bold text-white">Total</p>
+              <p className="text-xl font-bold text-gold">TSh {total.toLocaleString()}</p>
+            </div>
           </div>
+          
           <button 
             onClick={handleCheckout}
             disabled={cart.length === 0}
@@ -2115,6 +2814,80 @@ const BroadcastManagement = () => {
   );
 };
 
+const CalendarView = () => {
+  const [deadlines, setDeadlines] = useState<any[]>([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'orders'), 
+      where('deadline', '!=', null),
+      orderBy('deadline', 'asc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setDeadlines(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Imekamilika': return 'text-green-500 bg-green-500/10';
+      case 'Inashonwa': return 'text-amber-500 bg-amber-500/10';
+      default: return 'text-white/40 bg-white/5';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-xl font-bold text-white">Order Deadlines</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {deadlines.map((order) => {
+          const deadlineDate = order.deadline?.toDate();
+          const isOverdue = deadlineDate && deadlineDate < new Date() && order.status !== 'Imekamilika';
+          
+          return (
+            <div key={order.id} className={cn(
+              "rounded-2xl border p-6 transition-all",
+              isOverdue ? "border-red-500/50 bg-red-500/5" : "border-white/10 bg-white/5"
+            )}>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Order #{order.order_number}</span>
+                <span className={cn("px-2 py-1 rounded-full text-[10px] font-bold uppercase", getStatusColor(order.status))}>
+                  {order.status}
+                </span>
+              </div>
+              <h4 className="font-bold text-white mb-1">{order.customer_name}</h4>
+              <p className="text-xs text-white/40 mb-4">{order.items?.map((i: any) => i.name).join(', ')}</p>
+              
+              <div className="flex items-center justify-between pt-4 border-t border-white/5">
+                <div className="flex items-center gap-2 text-xs">
+                  <Clock size={14} className={isOverdue ? "text-red-500" : "text-gold"} />
+                  <span className={isOverdue ? "text-red-500 font-bold" : "text-white/60"}>
+                    {deadlineDate?.toLocaleDateString('sw-TZ', { day: 'numeric', month: 'short' })}
+                  </span>
+                </div>
+                {order.assigned_tailor_name && (
+                  <div className="flex items-center gap-2 text-[10px] text-white/40">
+                    <User size={12} />
+                    <span>{order.assigned_tailor_name}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {deadlines.length === 0 && (
+          <div className="col-span-full py-12 text-center text-white/20 italic">
+            Hakuna deadlines zilizowekwa bado.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const ReportsManagement = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -2271,6 +3044,98 @@ const ReportsManagement = () => {
     setLoading(false);
   };
 
+  const generateCustomerPDF = async () => {
+    setLoading(true);
+    try {
+      const doc = new jsPDF();
+      const now = new Date();
+      
+      const customersSnap = await getDocs(collection(db, 'customers'));
+      const customers = customersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(22);
+      doc.text('Kanzu Palace - Customer Report', 14, 20);
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Generated on: ${now.toLocaleString()}`, 14, 28);
+      
+      const tableData = customers
+        .sort((a: any, b: any) => (b.total_spent || 0) - (a.total_spent || 0))
+        .map((c: any, idx) => [
+          (idx + 1).toString(),
+          c.name || 'N/A',
+          c.phone || 'N/A',
+          (c.order_count || 0).toString(),
+          (c.loyalty_points || 0).toString(),
+          `TSh ${c.total_spent?.toLocaleString() || 0}`
+        ]);
+
+      autoTable(doc, {
+        startY: 35,
+        head: [['#', 'Name', 'Phone', 'Orders', 'Points', 'Total Spent']],
+        body: tableData,
+        theme: 'grid',
+        headStyles: { fillColor: [201, 168, 76], textColor: [0, 0, 0] },
+      });
+
+      doc.save(`Kanzu_Palace_Customer_Report_${now.getTime()}.pdf`);
+    } catch (error) {
+      console.error("Error generating customer PDF:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateInventoryPDF = async () => {
+    setLoading(true);
+    const doc = new jsPDF();
+    const now = new Date();
+    const monthYear = now.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    
+    const productsSnap = await getDocs(collection(db, 'products'));
+    const products = productsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Header
+    doc.setFontSize(22);
+    doc.setTextColor(201, 168, 76); // Gold
+    doc.text('KANZU PALACE', 105, 20, { align: 'center' });
+    doc.setFontSize(12);
+    doc.setTextColor(100);
+    doc.text(`Ripoti ya Hisa (Inventory) – ${monthYear}`, 105, 28, { align: 'center' });
+    doc.line(14, 35, 196, 35);
+
+    const tableData = products.map((p: any) => [
+      p.name,
+      p.category,
+      `TSh ${p.price?.toLocaleString()}`,
+      p.stock_quantity || 0,
+      (p.stock_quantity || 0) <= 5 ? 'LOW STOCK' : 'OK'
+    ]);
+
+    autoTable(doc, {
+      startY: 45,
+      head: [['Product Name', 'Category', 'Price', 'Stock', 'Status']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [201, 168, 76], textColor: [0, 0, 0], fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 4 },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.column.index === 4) {
+          const status = data.cell.raw as string;
+          if (status === 'LOW STOCK') {
+            data.cell.styles.textColor = [239, 68, 68];
+          }
+        }
+      }
+    });
+
+    doc.save(`Kanzu_Palace_Inventory_${now.getTime()}.pdf`);
+    setLoading(false);
+  };
+
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -2289,22 +3154,34 @@ const ReportsManagement = () => {
           </button>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-8 flex flex-col items-center text-center opacity-50">
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-8 flex flex-col items-center text-center">
           <div className="p-4 rounded-full bg-blue-500/10 text-blue-500 mb-4">
-            <TrendingUp size={32} />
+            <Package size={32} />
           </div>
           <h3 className="text-lg font-bold text-white">Inventory Report</h3>
-          <p className="text-xs text-white/40 mt-2 mb-6">Coming soon: Detailed report of stock levels and low inventory alerts.</p>
-          <button disabled className="h-12 px-8 rounded-xl border border-white/10 font-bold text-white/40 cursor-not-allowed">Coming Soon</button>
+          <p className="text-xs text-white/40 mt-2 mb-6">Detailed report of stock levels and low inventory alerts.</p>
+          <button 
+            onClick={generateInventoryPDF}
+            disabled={loading}
+            className="h-12 px-8 rounded-xl bg-blue-500 font-bold text-white hover:scale-[1.02] transition-all flex items-center gap-2"
+          >
+            {loading ? 'Generating...' : <><Download size={18} /> Download PDF</>}
+          </button>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-8 flex flex-col items-center text-center opacity-50">
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-8 flex flex-col items-center text-center">
           <div className="p-4 rounded-full bg-purple-500/10 text-purple-500 mb-4">
             <Users size={32} />
           </div>
           <h3 className="text-lg font-bold text-white">Customer Report</h3>
-          <p className="text-xs text-white/40 mt-2 mb-6">Coming soon: Analytics on customer behavior and top spenders.</p>
-          <button disabled className="h-12 px-8 rounded-xl border border-white/10 font-bold text-white/40 cursor-not-allowed">Coming Soon</button>
+          <p className="text-xs text-white/40 mt-2 mb-6">Analytics on customer behavior and top spenders.</p>
+          <button 
+            onClick={generateCustomerPDF}
+            disabled={loading}
+            className="h-12 px-8 rounded-xl bg-purple-500 font-bold text-white hover:scale-[1.02] transition-all flex items-center gap-2"
+          >
+            {loading ? 'Generating...' : <><Download size={18} /> Download PDF</>}
+          </button>
         </div>
       </div>
     </div>
@@ -2404,6 +3281,7 @@ export const Dashboard = () => {
   const menuItems = [
     { group: 'MUHTASARI', items: [
       { icon: <LayoutDashboard size={18} />, label: 'Overview', path: '/dashboard' },
+      { icon: <Calendar size={18} />, label: 'Kalenda ya Oda', path: '/dashboard/calendar' },
     ]},
     { group: 'MAUZO', items: [
       { icon: <ShoppingBag size={18} />, label: 'Oda & Malipo', path: '/dashboard/orders' },
@@ -2411,6 +3289,9 @@ export const Dashboard = () => {
     ]},
     { group: 'BIASHARA', items: [
       { icon: <Users size={18} />, label: 'Wafanyakazi', path: '/dashboard/staff', adminOnly: true },
+      { icon: <Wallet size={18} />, label: 'Matumizi (Expenses)', path: '/dashboard/expenses', adminOnly: true },
+      { icon: <Truck size={18} />, label: 'Suppliers', path: '/dashboard/suppliers', adminOnly: true },
+      { icon: <ShoppingBag size={18} />, label: 'Purchases', path: '/dashboard/purchases', adminOnly: true },
       { icon: <Scissors size={18} />, label: 'Ushonaji', path: '/dashboard/tailoring' },
       { icon: <UserCircle size={18} />, label: 'Wateja & Vipimo', path: '/dashboard/customers' },
     ]},
@@ -2521,11 +3402,15 @@ export const Dashboard = () => {
             <Route path="/pos" element={<POSManagement />} />
             <Route path="/products" element={<ProductsManagement />} />
             <Route path="/staff" element={<StaffManagement />} />
+            <Route path="/expenses" element={<ExpensesManagement />} />
+            <Route path="/suppliers" element={<SuppliersManagement />} />
+            <Route path="/purchases" element={<PurchasesManagement />} />
             <Route path="/tailoring" element={<TailoringManagement />} />
             <Route path="/customers" element={<CustomersManagement />} />
             <Route path="/broadcast" element={<BroadcastManagement />} />
             <Route path="/custom-orders" element={<CustomOrdersManagement />} />
             <Route path="/reports" element={<ReportsManagement />} />
+            <Route path="/calendar" element={<CalendarView />} />
             <Route path="/settings/*" element={<SettingsManagement />} />
           </Routes>
         </main>

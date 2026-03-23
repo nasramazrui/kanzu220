@@ -35,9 +35,58 @@
         "payment_method": { "type": "string" },
         "order_status": { "type": "string" },
         "notes": { "type": "string" },
+        "assigned_tailor_id": { "type": "string" },
+        "assigned_tailor_name": { "type": "string" },
+        "deadline": { "type": "string", "format": "date" },
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["customer_name", "customer_phone", "total", "order_status"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "A business supplier",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "contact_person": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "category": { "type": "string" },
+        "address": { "type": "string" },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "A business expense",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["category", "amount", "date"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "A purchase from a supplier",
+      "type": "object",
+      "properties": {
+        "supplier_id": { "type": "string" },
+        "supplier_name": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "total": { "type": "number" },
+        "date": { "type": "string", "format": "date" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["supplier_id", "total", "date"]
     },
     "Staff": {
       "title": "Staff",
@@ -220,6 +269,18 @@
     "/delivery_zones/{zoneId}": {
       "schema": "DeliveryZone",
       "description": "Collection of delivery zones"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": "Supplier",
+      "description": "Collection of suppliers"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Collection of business expenses"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": "Purchase",
+      "description": "Collection of supplier purchases"
     }
   }
 }
